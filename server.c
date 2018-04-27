@@ -7,12 +7,11 @@
 #include <time.h>
 #include <pthread.h>
 #include <assert.h>
-#include "zlib.h"
 
 #define SERVER_PORT (3000)
 #define LISTENNQ (5)
 #define MAXLINE (100000)
-#define MAXTHREAD (20)
+#define MAXTHREAD (200)
 
 struct extension 
 {
@@ -34,63 +33,6 @@ extension_mapping[] = {
 };
 
 void* request_func(void *args);
-
-// zlib compression of gzip for plain text file like html, css
-void compression(FILE* source, char* output)
-{
-    z_stream stream;
-    char input[MAXLINE];
-    char temp[MAXLINE];
-    
-    // initialize the z_stream
-    stream.zalloc = Z_NULL;
-    stream.zfree = Z_NULL;
-    stream.opaque = Z_NULL;
-    deflateInit2(&stream, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15, 8, Z_DEFAULT_STRATEGY);
-
-    // compression start
-    int total_byte = 0;
-    int current_byte;
-
-    // read the file until the end and loop to avoid the buffer is not big enough for the source file
-    while((current_byte = fread(temp, 1, MAXLINE, source)) > 0)
-    {
-        total_byte += current_byte;
-        strcat(input, temp);
-    }
-
-    // configure the input char array for compression
-    stream.avail_in = total_byte;
-    stream.next_in = input;
-    stream.avail_out = MAXLINE;
-    stream.next_out = output;
-    deflate(&stream, Z_FINISH);
-
-    // clean up the stream
-    (void) deflateEnd(&stream);
-}
-
-void decompression(char* input, char* output)
-{
-    z_stream stream;
-    
-    // initialize the z stream
-    stream.zalloc = Z_NULL;
-    stream.zfree = Z_NULL;
-    stream.opaque = Z_NULL;
-    inflateInit2(&stream, 15);
-
-    // compression start
-    stream.avail_in = strlen(input);
-
-    // configure the input char array for compression
-    stream.next_in = input;
-    stream.avail_out = MAXLINE;
-    stream.next_out = output;
-    inflate(&stream, Z_NO_FLUSH);
-    // clean up the stream
-    inflateEnd(&stream);
-}
 
 int main(int argc, char **argv)
 {
@@ -235,13 +177,10 @@ void* request_func(void *args)
                 printf("Error: 404 Not Found\n");
                 strcat(buff, "HTTP/1.1 404 Not Found\r\n");
                 strcat(buff, "Server: COMP4621PROJECT\r\n");
-                strcat(buff, "Content-Type: text/html\r\n");
-                strcat(buff, "Transfer-Encoding: chunked\r\n\r\n");
-                strcat(buff, "33\r\n");
-                strcat(buff, "<html><head><title>404 Not Found</head></title>\r\n");
-                strcat(buff, "36\r\n");
+                strcat(buff, "Content-Type: text/html\r\n\r\n");
+                strcat(buff, "<html><head><title>404 Not Found</title></head>\r\n");
                 strcat(buff, "<body><p>404 File Not Found!</p></body></html>\r\n\r\n");
-		        write(connfd, buff, strlen(buff));
+		write(connfd, buff, strlen(buff));
             }
             else
             {
@@ -253,55 +192,29 @@ void* request_func(void *args)
                 strcat(buff, "\r\n");
 
                 // get the file line by line and send in chunks
-                if (extension_mapping[j].filetype == "html" && extension_mapping[j].filetype != "css" && extension_mapping[j].filetype != "txt")
+                if (extension_mapping[j].filetype == "html" && extension_mapping[j].filetype == "css" && extension_mapping[j].filetype == "txt")
                 {
-                    strcat(buff, "Content-Encoding: gzip\r\n");
                     strcat(buff, "Transfer-Encoding: chunked\r\n\r\n");
                     write(connfd, buff, strlen(buff));
-                    
-                    char file_content[MAXLINE] = {0};
-                    compression(file_flag, file_content);
-
-                    // get the no of bytes of compressed string
-                    int file_size = strlen(file_content);
-                    int offset = 0;
-
-                    while (file_size > 0)
-                    {
-                        int file_length;
-                        char temp[128] = {0};
-                        if (file_size >= 128)
-                        {
-                            strncpy(temp, file_content + 128 * offset, 128);
-                            file_size -= 128;
-                            file_length = 128;
-                            offset++;
-                        }
-                        else
-                        {
-                            strncpy(temp, file_content + 128 * offset, file_size);
-                            file_length = file_size;
-                            file_size = 0;
-                        }
                         
+		    int byte_count = 0;
+		    char file_content[128] = {0};
+		    while((byte_count = fread(file_content, 1, 128, file_flag)) > 0)
+		    {
                         // conversion from decimal to hexa
                         char hex[8] = {0};
-                        sprintf(hex, "%x", file_length);
+                        sprintf(hex, "%x", file_content);
                         printf("Sending chunks of %s bytes\n", hex);
 
                         // embed the chunk size and corresponding chunk content into the buffer
                         send(connfd, hex, strlen(hex), 0);
                         send(connfd, "\r\n", 2, 0);
-                        send(connfd, temp, file_length, 0);
+                        send(connfd, file_content, byte_count, 0);
                         send(connfd, "\r\n", 2, 0);
                     }
+                    
                     // adding a 0 at the end of response indicates the end of chunks
                     send(connfd, "0\r\n\r\n", 5, 0);
-
-                    // debugging use for zlib
-                    char output[MAXLINE] = {0};
-                    decompression(file_content, output);
-                    printf("%s\n", output);
                 }
                 else
                 {
